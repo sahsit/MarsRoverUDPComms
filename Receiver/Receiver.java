@@ -21,7 +21,7 @@ public class Receiver {
         DatagramPacket incomingPacket = new DatagramPacket(buffer, buffer.length);
 
         //For GBN
-        int N = 128; //Needs to match sender
+        int N = 40; //Needs to match sender
         boolean[] received = new boolean[128];
         byte[][] bufferGBN = new byte[128][];
         int[] bufferGBNLength = new int[128];
@@ -114,15 +114,23 @@ public class Receiver {
                         bufferGBNLength[seqNum] = length;
                         received[seqNum] = true;
                     }
+                    
+                    //Writing to buffer
+                    while(received[expectedSequenceNum]){
+                        output.write(bufferGBN[expectedSequenceNum], 0, bufferGBNLength[expectedSequenceNum]);
 
-                    while(received[seqNum]){
-                        
+                        received[expectedSequenceNum] = false;
+                        bufferGBN[expectedSequenceNum] = null;
+                        bufferGBNLength[expectedSequenceNum] = 0;
+
+                        expectedSequenceNum = (expectedSequenceNum + 1) % 128;
                     }
                 }
 
 
                 // send last ACK back to sender's ACK port
-                DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, lastAck, null);
+                int cumulativeAck = (expectedSequenceNum + 127) % 128;
+                DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, cumulativeAck, null);
                 byte[] ackBytes = ack.toBytes();    
                 DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
 
@@ -144,7 +152,7 @@ public class Receiver {
                 int seqNum = packet.getSeqNum();
                 DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, seqNum, null);
                 byte[] ackBytes = ack.toBytes();
-                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, sndAddress, sndAckPort);
+                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
 
                 //Consulting CHaos Engine before sending
                 ackCount++;
