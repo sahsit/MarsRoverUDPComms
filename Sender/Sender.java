@@ -26,11 +26,14 @@ public class Sender {
         
         // Sending a SOT packet
         DSPacket sot = new DSPacket(DSPacket.TYPE_SOT, 0, null);
+        int timeoutCount = 0;
+        long startTime = System.nanoTime();
 
         while (true) {
             byte[] bytes = sot.toBytes();
             DatagramPacket udp = new DatagramPacket(bytes, bytes.length, rcvAddress, rcvDataPort);
             socket.send(udp);
+            //System.out.println("Sender sent SOT");
 
             // Waiting and getting an ACK 0
             byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
@@ -44,11 +47,19 @@ public class Sender {
                 // now, we can use ackPacket, which is the application-layer packet that we can easily work with, to check if it's the ACK we expect for the SOT we sent (type should be ACK and seqNum should be 0)
                 if (ackPacket.getType() == DSPacket.TYPE_ACK && ackPacket.getSeqNum() == 0) {
                     System.out.println("ACK received for SOT");
+                    timeoutCount = 0;
                     break;
                 }
             } catch (SocketTimeoutException e) {
                 System.out.println("Timeout, resending SOT");
                 // resend SOT packet
+                timeoutCount++;
+                
+                if (timeoutCount >=3) {
+                    System.out.println("Unable to transfer file.");
+                    socket.close();
+                    return;
+                }
             }
 
         }
@@ -56,20 +67,48 @@ public class Sender {
         //[window_size]
         if (args.length == 6) {
             int windowSize = Integer.parseInt(args[5]);
+            if (windowSize <= 0 || windowSize > 128 || windowSize % 4 != 0) {
+                System.out.println("Invalid window size. Must be a multiple of 4 and <= 128.");
+                socket.close();
+                return;
+            }
+
             FileInputStream fis = new FileInputStream(inputFile);
             int lastDataSeq = goBackN(socket, fis, rcvAddress, rcvDataPort, windowSize);
             fis.close();
+
+            if (lastDataSeq == -1) {
+                return;
+            }
+
             int eotSeq = (lastDataSeq + 1) % 128;
-            eotProtocol(socket, rcvAddress, rcvDataPort, eotSeq);
+            int result = eotProtocol(socket, rcvAddress, rcvDataPort, eotSeq);
+            if (result == -1) {
+                return;
+            }
+
+            long endTime = System.nanoTime();
+            double seconds = (endTime - startTime) / 1_000_000_000.0;
+            System.out.printf("Total transmission time: %.2f seconds%n", seconds);
+            
             socket.close();
             
         } else {
             // use stop and wait
             FileInputStream fis = new FileInputStream(inputFile);
             int lastDataSeq = stopAndWait(socket, fis, rcvAddress, rcvDataPort);
+            if (lastDataSeq == -1) {
+                return;
+            }
             fis.close();
             int eotSeq = (lastDataSeq + 1) % 128;
-            eotProtocol(socket, rcvAddress, rcvDataPort, eotSeq);
+            int result = eotProtocol(socket, rcvAddress, rcvDataPort, eotSeq);
+            if (result == -1) {
+                return;
+            }
+            long endTime = System.nanoTime();
+            double seconds = (endTime - startTime) / 1_000_000_000.0;
+            System.out.printf("Total transmission time: %.2f seconds%n", seconds);
             socket.close();
         }
 
@@ -100,7 +139,8 @@ public class Sender {
 
             // creating the application layer packet with the payload we just read and the current sequence number (type is DATA)
             DSPacket dataPkt = new DSPacket(DSPacket.TYPE_DATA, seq, payload);
-            
+            int timeoutCount = 0;
+
             // loop to wait for acks
             while (true) { 
                 byte[] out = dataPkt.toBytes(); // converting the packet to raw bytes
@@ -123,6 +163,7 @@ public class Sender {
                         lastAcked = seq;
                         seq = (seq + 1) % 128;
                         System.out.println("Received ACK with correct seq num " + ackPacket.getSeqNum() + ", moving on to next packet with seq " + seq);
+                        timeoutCount = 0;
                         break;
                     } else {
                         System.out.println("Received ACK with wrong seq num. expected " + seq + " but got " + ackPacket.getSeqNum() + ", resending packet with seq " + seq);
@@ -131,6 +172,12 @@ public class Sender {
                     } catch (SocketTimeoutException e) {
                         System.out.println("Timeout, resending packet with seq " + seq);
                         // resend packet we just sent
+                        timeoutCount++;
+                        if (timeoutCount >= 3) {
+                            System.out.println("Unable to transfer file.");
+                            socket.close();
+                            return -1;
+                        }
                     }
             
             }
@@ -149,6 +196,8 @@ public class Sender {
         int nextIndex = 0;
         // the most recent sequence number of the ACK we received
         int lastAckedSeq = 0;
+
+        int timeoutCount = 0;
 
         // while there are still packets to send (last unACKed packet doesn't go over the total number of packets)
         while (baseIndex < packets.size()) {
@@ -213,11 +262,18 @@ public class Sender {
                     if (newBase < packets.size() && packets.get(newBase).getSeqNum() == ackSeq) {
                         baseIndex = newBase + 1;
                         System.out.println("Received ACK for seq " + ackSeq + ", sliding window to base index " + baseIndex);
+                        timeoutCount = 0;
                     }
                 }
             
             } catch (SocketTimeoutException e) {
                 nextIndex = baseIndex; // Timeout, go back to the base index to resend all packets in the window
+                timeoutCount++;
+                if (timeoutCount >= 3) {
+                    System.out.println("Unable to transfer file.");
+                    socket.close();
+                    return -1;
+                }
             }        
         }
         return lastAckedSeq;
@@ -254,6 +310,7 @@ public class Sender {
     private static int eotProtocol(DatagramSocket socket, InetAddress rcvAddress, int rcvDataPort, int eotSeq) throws IOException {
 
         DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
+        int timeoutCount = 0;
 
         while (true) { 
             byte[] eotBytes = eot.toBytes();
@@ -273,6 +330,12 @@ public class Sender {
                 }
             } catch (SocketTimeoutException e) {
                 System.out.println("Timeout, resending EOT");
+                timeoutCount++;
+                if (timeoutCount >= 3) {
+                    System.out.println("Unable to transfer file.");
+                    socket.close();
+                    return -1;
+                }
             }
         }
         return eotSeq;
