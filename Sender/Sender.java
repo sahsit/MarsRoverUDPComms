@@ -35,34 +35,44 @@ public class Sender {
             socket.send(udp);
             //System.out.println("Sender sent SOT");
 
-            // Waiting and getting an ACK 0
-            byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
-            DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
-            
-            try {
-                socket.receive(incoming); // writing the incoming packet's raw bytes into the buffer (the buffer is now filled with the raw bytes of the incoming packet)
+            while(true){
+                // Waiting and getting an ACK 0
+                byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
+                DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
 
-                DSPacket ackPacket = new DSPacket(incoming.getData()); // wrapping the datagramPacket in a DSPacket object to parse the raw bytes into the packet's fields (type, seqNum, length, payload)
 
-                // now, we can use ackPacket, which is the application-layer packet that we can easily work with, to check if it's the ACK we expect for the SOT we sent (type should be ACK and seqNum should be 0)
-                if (ackPacket.getType() == DSPacket.TYPE_ACK && ackPacket.getSeqNum() == 0) {
-                    System.out.println("ACK received for SOT");
-                    timeoutCount = 0;
+                try {
+                    socket.receive(incoming); // writing the incoming packet's raw bytes into the buffer (the buffer is now filled with the raw bytes of the incoming packet)
+
+                    DSPacket ackPacket = new DSPacket(incoming.getData()); // wrapping the datagramPacket in a DSPacket object to parse the raw bytes into the packet's fields (type, seqNum, length, payload)
+
+                    // now, we can use ackPacket, which is the application-layer packet that we can easily work with, to check if it's the ACK we expect for the SOT we sent (type should be ACK and seqNum should be 0)
+                    if (ackPacket.getType() == DSPacket.TYPE_ACK && ackPacket.getSeqNum() == 0) {
+                        System.out.println("ACK received for SOT");
+                        timeoutCount = 0;
+                        break;
+                    }
+                } catch (SocketTimeoutException e) {
+                    System.out.println("Timeout, resending SOT");
+                    // resend SOT packet
+                    timeoutCount++;
+                    
+                    if (timeoutCount >=3) {
+                        System.out.println("Unable to transfer file.");
+                        socket.close();
+                        return;
+                    }
                     break;
                 }
-            } catch (SocketTimeoutException e) {
-                System.out.println("Timeout, resending SOT");
-                // resend SOT packet
-                timeoutCount++;
-                
-                if (timeoutCount >=3) {
-                    System.out.println("Unable to transfer file.");
-                    socket.close();
-                    return;
-                }
             }
+            if(timeoutCount == 0){
+                //Correct ACK
+                break;
+            }
+            
 
         }
+        
         
         //[window_size]
         if (args.length == 6) {
@@ -78,6 +88,7 @@ public class Sender {
             fis.close();
 
             if (lastDataSeq == -1) {
+                socket.close();
                 return;
             }
 
@@ -89,7 +100,7 @@ public class Sender {
 
             long endTime = System.nanoTime();
             double seconds = (endTime - startTime) / 1_000_000_000.0;
-            System.out.printf("Total transmission time: %.2f seconds%n", seconds);
+            System.out.printf("Total Transmission Time: %.2f seconds%n", seconds);
             
             socket.close();
             
@@ -108,7 +119,7 @@ public class Sender {
             }
             long endTime = System.nanoTime();
             double seconds = (endTime - startTime) / 1_000_000_000.0;
-            System.out.printf("Total transmission time: %.2f seconds%n", seconds);
+            System.out.printf("Total Transmission Time: %.2f seconds%n", seconds);
             socket.close();
         }
 
@@ -140,48 +151,50 @@ public class Sender {
             // creating the application layer packet with the payload we just read and the current sequence number (type is DATA)
             DSPacket dataPkt = new DSPacket(DSPacket.TYPE_DATA, seq, payload);
             int timeoutCount = 0;
+            boolean correctACK = false;
 
             // loop to wait for acks
-            while (true) { 
+            while (!correctACK) { 
                 byte[] out = dataPkt.toBytes(); // converting the packet to raw bytes
                 // wrapping the raw bytes in a datagram packet to send over the network
                 DatagramPacket udp = new DatagramPacket(out, out.length, rcvAddress, rcvDataPort);
                 socket.send(udp);
                 System.out.println("Sent DATA packet with seq num " + seq);
                 
-                // Waiting and getting an ACK from receiver
-                byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
-                DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
+                while(true){
+                    byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
+                    DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
+                    // Waiting and getting an ACK from receiver
                 
-                try {
-                    socket.receive(incoming); // writing the incoming packet's raw bytes into the buffer (the buffer is now filled with the raw bytes of the incoming packet)
+                    try {
+                        socket.receive(incoming); // writing the incoming packet's raw bytes into the buffer (the buffer is now filled with the raw bytes of the incoming packet)
 
-                    DSPacket ackPacket = new DSPacket(incoming.getData()); // wrapping the datagramPacket in a DSPacket object to parse the raw bytes into the packet's fields (type, seqNum, length, payload)
+                        DSPacket ackPacket = new DSPacket(incoming.getData()); // wrapping the datagramPacket in a DSPacket object to parse the raw bytes into the packet's fields (type, seqNum, length, payload)
+                        System.out.println("Sender saw packet type " + ackPacket.getType() + " seq " + ackPacket.getSeqNum());
+                        // now, we can use ackPacket, which is the application-layer packet that we can easily work with, to check if it's the ACK we expect for the SOT we sent (type should be ACK and seqNum should be 0)
+                        if (ackPacket.getType() == DSPacket.TYPE_ACK && ackPacket.getSeqNum() == seq) {
+                            lastAcked = seq;
+                            seq = (seq + 1) % 128;
+                            System.out.println("Received ACK with correct seq num " + ackPacket.getSeqNum() + ", moving on to next packet with seq " + seq);
+                            timeoutCount = 0;
+                            correctACK = true;
+                            break;
+                        } //For else we just ignore till timeout
 
-                    // now, we can use ackPacket, which is the application-layer packet that we can easily work with, to check if it's the ACK we expect for the SOT we sent (type should be ACK and seqNum should be 0)
-                    if (ackPacket.getType() == DSPacket.TYPE_ACK && ackPacket.getSeqNum() == seq) {
-                        lastAcked = seq;
-                        seq = (seq + 1) % 128;
-                        System.out.println("Received ACK with correct seq num " + ackPacket.getSeqNum() + ", moving on to next packet with seq " + seq);
-                        timeoutCount = 0;
-                        break;
-                    } else {
-                        System.out.println("Received ACK with wrong seq num. expected " + seq + " but got " + ackPacket.getSeqNum() + ", resending packet with seq " + seq);
-                        // resend packet we just sent
-                    }
-                    } catch (SocketTimeoutException e) {
-                        System.out.println("Timeout, resending packet with seq " + seq);
-                        // resend packet we just sent
-                        timeoutCount++;
-                        if (timeoutCount >= 3) {
-                            System.out.println("Unable to transfer file.");
-                            socket.close();
-                            return -1;
+                        } catch (SocketTimeoutException e) {
+                            System.out.println("Timeout, resending packet with seq " + seq);
+                            // resend packet we just sent
+                            timeoutCount++;
+                            if (timeoutCount >= 3) {
+                                System.out.println("Unable to transfer file.");
+                                socket.close();
+                                return -1;
+                            }
+                            break;
                         }
                     }
-            
+                }
             }
-        }
         return lastAcked;
     }
 
@@ -249,18 +262,18 @@ public class Sender {
                 if (ack.getType() == DSPacket.TYPE_ACK) {
                     // ... get the sequence number of the ACK and update lastAckedSeq
                     int ackSeq = ack.getSeqNum();
-                    lastAckedSeq = ackSeq;
 
                     // trying to find the ACKed packet that has the sequence number that matches the sequence number of the ACK we just received (basically trying to find our new "last unACKed packet")
                     // as long as we don't go past the total number of packets and we haven't found a sequence num match, we keep going
                     int newBase = baseIndex;
-                    while (newBase < packets.size() && packets.get(newBase).getSeqNum() != ackSeq) {
+                    while (newBase < nextIndex && packets.get(newBase).getSeqNum() != ackSeq) {
                         newBase++;
                     }
 
                     // once we find the packet's sequence num that matches the ACK's seq num we just got, we move the baseIndex to it + 1
-                    if (newBase < packets.size() && packets.get(newBase).getSeqNum() == ackSeq) {
+                    if (newBase < nextIndex && packets.get(newBase).getSeqNum() == ackSeq) {
                         baseIndex = newBase + 1;
+                        lastAckedSeq = ackSeq;
                         System.out.println("Received ACK for seq " + ackSeq + ", sliding window to base index " + baseIndex);
                         timeoutCount = 0;
                     }
@@ -306,40 +319,46 @@ public class Sender {
 
         return packets;
     }
+
     
     private static int eotProtocol(DatagramSocket socket, InetAddress rcvAddress, int rcvDataPort, int eotSeq) throws IOException {
 
         DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
         int timeoutCount = 0;
 
-        while (true) { 
+        while (true) {
             byte[] eotBytes = eot.toBytes();
             DatagramPacket eotUdp = new DatagramPacket(eotBytes, eotBytes.length, rcvAddress, rcvDataPort);
             socket.send(eotUdp);
 
-            byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
-            DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
+            while (true) {
+                
+                byte[] buffer = new byte[DSPacket.MAX_PACKET_SIZE]; // making a buffer to hold the raw bytes of future incoming packets (making it max packet size)
+                DatagramPacket incoming = new DatagramPacket(buffer, buffer.length); // wrapping this buffer in a datagramPacket object (the socket can only receive datagram packets, not raw bytes, so we need to wrap the buffer in a datagram packet to receive data into it)
+    
 
-            try {
-                socket.receive(incoming);
-                DSPacket ack = new DSPacket(incoming.getData());
+                try {
+                    socket.receive(incoming);
+                    DSPacket ack = new DSPacket(incoming.getData());
 
-                if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == eotSeq) {
-                    System.out.println("ACK received for EOT, transmission complete");
-                    break;
-                }
-            } catch (SocketTimeoutException e) {
-                System.out.println("Timeout, resending EOT");
-                timeoutCount++;
-                if (timeoutCount >= 3) {
-                    System.out.println("Unable to transfer file.");
-                    socket.close();
-                    return -1;
+                    if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == eotSeq) {
+                        System.out.println("ACK received for EOT, transmission complete");
+                        return eotSeq;
+                    }
+
+                    // Ignore wrong/stale packets and keep waiting until timeout
+                } catch (SocketTimeoutException e) {
+                    System.out.println("Timeout, resending EOT");
+                    timeoutCount++;
+                    if (timeoutCount >= 3) {
+                        System.out.println("Unable to transfer file.");
+                        socket.close();
+                        return -1;
+                    }
+                    break; // resend EOT
                 }
             }
         }
-        return eotSeq;
     }
-
-
-    }
+    
+}

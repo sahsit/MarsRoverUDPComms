@@ -3,6 +3,7 @@ import java.net.*;
 
 
 public class Receiver {
+    public static final int GBNWindow = 40;
     public static void main(String[] args) throws Exception {
 
         //java Receiver <sender_ip> <sender_ack_port> <rcv_data_port> <output_file> <RN>
@@ -21,7 +22,7 @@ public class Receiver {
         DatagramPacket incomingPacket = new DatagramPacket(buffer, buffer.length);
 
         //For GBN
-        int N = 40; //Needs to match sender
+        
         boolean[] received = new boolean[128];
         byte[][] bufferGBN = new byte[128][];
         int[] bufferGBNLength = new int[128];
@@ -39,7 +40,7 @@ public class Receiver {
                 // send ACK(0) back to sender's ACK port
                 DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, 0, null);
                 byte[] ackBytes = ack.toBytes();
-                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
+                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, sndAddress, sndAckPort);
 
 
                 //Consulting CHaos Engine before sending
@@ -58,7 +59,7 @@ public class Receiver {
         //Handshake complete
         //Data transfer
         int expectedSequenceNum = 1;
-        int lastAck = 0;
+        //int lastAck = 0;
         FileOutputStream output = new FileOutputStream(outputFile);
 
         //DATA TRANSFER LOOP
@@ -75,7 +76,7 @@ public class Receiver {
                 // send ACK(0) back to sender's ACK port
                 DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, 0, null);
                 byte[] ackBytes = ack.toBytes();    
-                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
+                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, sndAddress, sndAckPort);
                 //Consulting CHaos Engine before sending
                 ackCount++;
                 if(ChaosEngine.shouldDrop(ackCount, RN)){
@@ -89,22 +90,10 @@ public class Receiver {
             //CASE FOR DATA PACKETS
             else if(packet.getType() == DSPacket.TYPE_DATA){
                 System.out.println("Got a Data Packet");
-                //Get sequence number of the sent packet
                 int seqNum = packet.getSeqNum();
 
-                // //CASE FOR IN ORDER PACKETS
-                // if(seqNum == expectedSequenceNum){
-                //     //Write packet data to output file
-                //     output.write(packet.getPayload(), 0, packet.getLength());
-
-                //     //Increment LastAck
-                //     lastAck = expectedSequenceNum;
-                //     //ExpectedSequence Num runs 0-127
-                //     expectedSequenceNum = (expectedSequenceNum + 1) % 128;
-                // }
-                // //CASE FOR OUT OF ORDER PACKETS IS DO NOTHING
-
-                if(packetInWindow(seqNum, expectedSequenceNum, N)){
+                // Packets are in order
+                if(seqNum == expectedSequenceNum){
                     if(!received[seqNum]){
                         int length = packet.getLength();
                         byte[] copy = new byte[length];
@@ -114,8 +103,8 @@ public class Receiver {
                         bufferGBNLength[seqNum] = length;
                         received[seqNum] = true;
                     }
-                    
-                    //Writing to buffer
+
+                    //Write them
                     while(received[expectedSequenceNum]){
                         output.write(bufferGBN[expectedSequenceNum], 0, bufferGBNLength[expectedSequenceNum]);
 
@@ -126,13 +115,31 @@ public class Receiver {
                         expectedSequenceNum = (expectedSequenceNum + 1) % 128;
                     }
                 }
+                else {
+                    int distance = (seqNum - expectedSequenceNum + 128) % 128;
+
+                    //Buffer them
+                    if(distance > 0 && distance < GBNWindow){
+                        if(!received[seqNum]){
+                            int length = packet.getLength();
+                            byte[] copy = new byte[length];
+                            System.arraycopy(packet.getPayload(), 0, copy, 0, length);
+
+                            bufferGBN[seqNum] = copy;
+                            bufferGBNLength[seqNum] = length;
+                            received[seqNum] = true;
+                        }
+                    }
+
+                    //Else not important
+                }
 
 
                 // send last ACK back to sender's ACK port
                 int cumulativeAck = (expectedSequenceNum + 127) % 128;
                 DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, cumulativeAck, null);
                 byte[] ackBytes = ack.toBytes();    
-                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
+                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, sndAddress, sndAckPort);
 
                 //Consulting CHaos Engine before sending
                 ackCount++;
@@ -152,7 +159,7 @@ public class Receiver {
                 int seqNum = packet.getSeqNum();
                 DSPacket ack = new DSPacket(DSPacket.TYPE_ACK, seqNum, null);
                 byte[] ackBytes = ack.toBytes();
-                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, incomingPacket.getAddress(), sndAckPort);
+                DatagramPacket ackUdp = new DatagramPacket(ackBytes, ackBytes.length, sndAddress, sndAckPort);
 
                 //Consulting CHaos Engine before sending
                 ackCount++;
@@ -171,14 +178,6 @@ public class Receiver {
         //EOT Will break out of loop
         output.close();
         socket.close();
-    }
-
-
-    //Used to check if incoming packets are within the window and should be buffered
-    private static boolean packetInWindow(int sequenceNum, int baseNum, int N){
-        int distance = (sequenceNum - baseNum + 128) % 128;
-        boolean result = distance < N;
-        return result;
     }
 }
 
