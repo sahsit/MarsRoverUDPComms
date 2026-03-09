@@ -3,7 +3,9 @@ import java.net.*;
 
 
 public class Receiver {
+    //Assignment said not to pass an new arg to Receiver so this is hardcoded and must be changed when we have a new GBN Window size
     public static final int GBNWindow = 40;
+
     public static void main(String[] args) throws Exception {
 
         //java Receiver <sender_ip> <sender_ack_port> <rcv_data_port> <output_file> <RN>
